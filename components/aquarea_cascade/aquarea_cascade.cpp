@@ -68,6 +68,15 @@ void AquareaCascade::dump_config() {
 }
 
 void AquareaCascade::request_command(Command cmd) {
+  // dry_run: publish immediately from the caller (API/button task) and do
+  // nothing else — isolates crashes from loop()/UART RX/state machine.
+  if (this->dry_run_) {
+    char buf[48];
+    snprintf(buf, sizeof(buf), "ok:dry_run:%s:sync", this->command_name_(cmd));
+    this->publish_result_(buf);
+    ESP_LOGI(TAG, "DRY_RUN sync ok for %s (no queue, no UART)", this->command_name_(cmd));
+    return;
+  }
   // Safe to call from button/API thread: only set a flag for loop().
   this->queued_cmd_ = cmd;
   this->queued_cmd_valid_ = true;
@@ -460,6 +469,15 @@ void AquareaCascade::loop() {
     } else {
       this->start_command_(cmd);
     }
+  }
+
+  // dry_run: skip UART RX entirely (CMH traffic can be heavy).
+  if (this->dry_run_) {
+    if (now - this->last_debug_publish_ms_ >= 5000) {
+      this->last_debug_publish_ms_ = now;
+      this->publish_phase_();
+    }
+    return;
   }
 
   // Cap bytes per loop to avoid starving WiFi / WDT under noisy RX.
