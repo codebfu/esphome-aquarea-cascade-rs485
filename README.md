@@ -43,12 +43,19 @@ Write order (non-off): mode → tank → ON.
 4. Optionally wait until `HP1 Command Result` starts with `ok:` (up to 60 s).
 5. Keep CMH Modbus TCP entities for live mode / temps / tank feedback.
 
-## Config
+## Config / flash
 
 ```bash
 cp secrets.yaml.example secrets.yaml
 # edit secrets; generate api key: openssl rand -base64 32
-esphome run aquarea-hp1-writer.yaml
+python -m esphome compile aquarea-hp1-writer.yaml
+```
+
+**First flash** (migrating from the PlatformIO lab firmware): use **USB serial** — ArduinoOTA on the lab image does not speak ESPHome OTA (port 3232). After the first ESPHome flash, subsequent updates can use ESPHome OTA.
+
+```bash
+python -m esphome upload aquarea-hp1-writer.yaml --device COMx
+# or: python -m esphome run aquarea-hp1-writer.yaml
 ```
 
 External component path: `components/aquarea_cascade` (YAML key `aquarea_cascade`).
