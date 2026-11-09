@@ -117,11 +117,15 @@ class AquareaCascade : public Component, public uart::UARTDevice {
   static constexpr size_t kMaxFrame = 256;
   uint8_t frame_buf_[kMaxFrame]{};
   size_t frame_len_{0};
+  size_t expected_len_{0};  // 0 = unknown; set once FC03 bytecount is visible
   uint32_t last_byte_ms_{0};
   // Idle is measured from last completed frame end (not every RX byte),
   // so dense CMH request/response pairs still leave a usable gap.
   uint32_t last_frame_end_ms_{0};
-  uint32_t frame_gap_ms_{3};
+  // Inter-frame silence. Must be >> ESP loop jitter so chunked UART reads of a
+  // single long FC03 response (95 B) are not split across loop() iterations.
+  uint32_t frame_gap_ms_{50};
+  uint32_t frame_abort_ms_{300};  // drop incomplete PDU after this silence
 
   bool have_pending_read_{false};
   uint16_t pending_read_start_{0};

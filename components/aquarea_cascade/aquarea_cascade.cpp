@@ -298,45 +298,78 @@ bool AquareaCascade::send_next_write_() {
   this->tx_holdoff_until_ms_ = this->last_write_ms_ + 15;
   this->last_frame_end_ms_ = this->last_write_ms_;
   this->frame_len_ = 0;
+  this->expected_len_ = 0;
   ESP_LOGI(TAG, "TX FC06 id=%u reg=%u val=%u", this->address_, (unsigned) reg, (unsigned) val);
   this->write_index_++;
   return this->write_index_ >= this->write_count_;
 }
 
 void AquareaCascade::feed_byte_(uint8_t b, uint32_t now_ms) {
+  // Gap between frames only — never abort a PDU whose length we already know
+  // (long FC03 responses are often delivered across several loop() turns).
   if (this->frame_len_ > 0 && (now_ms - this->last_byte_ms_) >= this->frame_gap_ms_) {
-    this->finalize_frame_(now_ms);
-  }
-  this->last_byte_ms_ = now_ms;
-  if (this->frame_len_ < kMaxFrame) {
-    this->frame_buf_[this->frame_len_++] = b;
-  } else {
-    this->frame_len_ = 0;
-    this->frame_buf_[this->frame_len_++] = b;
-  }
-
-  // Cut frames as soon as a complete Modbus RTU PDU is present — CMH
-  // request→response turnaround can be <5 ms, so gap-only framing merges them.
-  if (this->frame_len_ >= 8) {
-    const uint8_t fc = this->frame_buf_[1];
-    if ((fc == 0x03 || fc == 0x06 || fc == 0x10) && this->frame_len_ == 8) {
-      uint16_t crc_calc = crc16_(this->frame_buf_, 6);
-      uint16_t crc_frame = uint16_t(this->frame_buf_[6]) | (uint16_t(this->frame_buf_[7]) << 8);
-      if (crc_calc == crc_frame) {
-        this->finalize_frame_(now_ms);
-        return;
-      }
+    if (this->expected_len_ == 0 || this->frame_len_ >= this->expected_len_ ||
+        (now_ms - this->last_byte_ms_) >= this->frame_abort_ms_) {
+      this->finalize_frame_(now_ms);
     }
   }
-  if (this->frame_len_ >= 5 && this->frame_buf_[1] == 0x03) {
+  this->last_byte_ms_ = now_ms;
+  if (this->frame_len_ >= kMaxFrame) {
+    this->frame_len_ = 0;
+    this->expected_len_ = 0;
+  }
+  this->frame_buf_[this->frame_len_++] = b;
+
+  if (this->frame_len_ < 2)
+    return;
+  const uint8_t fc = this->frame_buf_[1];
+
+  // Fixed-length write PDUs (request or echo): always 8 bytes.
+  if ((fc == 0x06 || fc == 0x10) && this->frame_len_ == 8) {
+    uint16_t crc_calc = crc16_(this->frame_buf_, 6);
+    uint16_t crc_frame = uint16_t(this->frame_buf_[6]) | (uint16_t(this->frame_buf_[7]) << 8);
+    if (crc_calc == crc_frame) {
+      this->finalize_frame_(now_ms);
+    }
+    return;
+  }
+
+  if (fc != 0x03)
+    return;
+
+  // FC03 request is 8 bytes. Try that first once we have 8 bytes and no
+  // longer expected response length locked in.
+  if (this->frame_len_ == 8 && this->expected_len_ == 0) {
+    uint16_t crc_calc = crc16_(this->frame_buf_, 6);
+    uint16_t crc_frame = uint16_t(this->frame_buf_[6]) | (uint16_t(this->frame_buf_[7]) << 8);
+    if (crc_calc == crc_frame) {
+      this->finalize_frame_(now_ms);
+      return;
+    }
+  }
+
+  // FC03 response: bytecount at [2], total length 5 + bytecount.
+  if (this->frame_len_ >= 3) {
     uint8_t bytecount = this->frame_buf_[2];
-    size_t need = size_t(5) + bytecount;
-    if (bytecount > 0 && bytecount <= 250 && this->frame_len_ == need) {
-      uint16_t crc_calc = crc16_(this->frame_buf_, need - 2);
-      uint16_t crc_frame =
-          uint16_t(this->frame_buf_[need - 2]) | (uint16_t(this->frame_buf_[need - 1]) << 8);
-      if (crc_calc == crc_frame) {
-        this->finalize_frame_(now_ms);
+    if (bytecount > 0 && bytecount <= 250 && (bytecount % 2) == 0) {
+      size_t need = size_t(5) + bytecount;
+      // Lock expected length only when request CRC at 8 bytes failed (or we
+      // already grew past 8), so start_hi==even is not mistaken for bytecount
+      // on a real request that simply has not finished CRC check yet.
+      if (this->frame_len_ > 8 || this->expected_len_ != 0 || need != 8) {
+        this->expected_len_ = need;
+      }
+      if (this->expected_len_ == need && this->frame_len_ == need) {
+        uint16_t crc_calc = crc16_(this->frame_buf_, need - 2);
+        uint16_t crc_frame =
+            uint16_t(this->frame_buf_[need - 2]) | (uint16_t(this->frame_buf_[need - 1]) << 8);
+        if (crc_calc == crc_frame) {
+          this->finalize_frame_(now_ms);
+        } else {
+          // Bad CRC at expected length — resync.
+          this->frame_len_ = 0;
+          this->expected_len_ = 0;
+        }
       }
     }
   }
@@ -347,6 +380,7 @@ void AquareaCascade::finalize_frame_(uint32_t now_ms) {
     this->handle_frame_(this->frame_buf_, this->frame_len_);
   }
   this->frame_len_ = 0;
+  this->expected_len_ = 0;
   this->last_frame_end_ms_ = now_ms;
 }
 
@@ -482,8 +516,12 @@ void AquareaCascade::loop() {
   }
   if (this->frame_len_ > 0 && !this->available()) {
     uint32_t t = millis();
-    if ((t - this->last_byte_ms_) >= this->frame_gap_ms_) {
-      this->finalize_frame_(t);
+    uint32_t silent = t - this->last_byte_ms_;
+    if (silent >= this->frame_gap_ms_) {
+      if (this->expected_len_ == 0 || this->frame_len_ >= this->expected_len_ ||
+          silent >= this->frame_abort_ms_) {
+        this->finalize_frame_(t);
+      }
     }
   }
 
