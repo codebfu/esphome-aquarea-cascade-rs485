@@ -6,8 +6,7 @@
 namespace esphome {
 namespace aquarea_cascade {
 
-// Marker type so the text_sensor platform has a dedicated class id.
-class AquareaCascadeResultSensor : public text_sensor::TextSensor, public Component {};
+class AquareaCascadeTextSensor : public text_sensor::TextSensor, public Component {};
 
 }  // namespace aquarea_cascade
 }  // namespace esphome

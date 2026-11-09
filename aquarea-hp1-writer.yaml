@@ -47,13 +47,36 @@ aquarea_cascade:
   id: hp1_writer
   uart_id: rs485_uart
   address: 1
-  idle_time: 180ms
+  idle_time: 80ms
   timeout: 60s
 
 text_sensor:
   - platform: aquarea_cascade
     name: "HP1 Command Result"
     id: hp1_last_result
+    type: result
+  - platform: aquarea_cascade
+    name: "HP1 Phase"
+    id: hp1_phase
+    type: phase
+
+sensor:
+  - platform: aquarea_cascade
+    name: "HP1 Sniff Op"
+    id: hp1_sniff_op
+    type: sniff_op
+  - platform: aquarea_cascade
+    name: "HP1 Sniff Mode"
+    id: hp1_sniff_mode
+    type: sniff_mode
+  - platform: aquarea_cascade
+    name: "HP1 Sniff Tank"
+    id: hp1_sniff_tank
+    type: sniff_tank
+  - platform: aquarea_cascade
+    name: "HP1 RX Frames"
+    id: hp1_rx_frames
+    type: rx_frames
 
 button:
   - platform: aquarea_cascade

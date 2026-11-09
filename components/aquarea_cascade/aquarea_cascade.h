@@ -4,6 +4,7 @@
 #include "esphome/core/helpers.h"
 #include "esphome/components/uart/uart.h"
 #include "esphome/components/text_sensor/text_sensor.h"
+#include "esphome/components/sensor/sensor.h"
 
 #include <vector>
 
@@ -25,6 +26,11 @@ class AquareaCascade : public Component, public uart::UARTDevice {
   void set_idle_ms(uint32_t idle_ms) { this->idle_ms_ = idle_ms; }
   void set_confirm_timeout_ms(uint32_t ms) { this->confirm_timeout_ms_ = ms; }
   void set_result_sensor(text_sensor::TextSensor *sensor) { this->result_sensor_ = sensor; }
+  void set_phase_sensor(text_sensor::TextSensor *sensor) { this->phase_sensor_ = sensor; }
+  void set_sniff_op_sensor(sensor::Sensor *sensor) { this->sniff_op_sensor_ = sensor; }
+  void set_sniff_mode_sensor(sensor::Sensor *sensor) { this->sniff_mode_sensor_ = sensor; }
+  void set_sniff_tank_sensor(sensor::Sensor *sensor) { this->sniff_tank_sensor_ = sensor; }
+  void set_rx_frames_sensor(sensor::Sensor *sensor) { this->rx_frames_sensor_ = sensor; }
 
   void request_command(Command cmd);
 
@@ -51,9 +57,12 @@ class AquareaCascade : public Component, public uart::UARTDevice {
   };
 
   void publish_result_(const std::string &value);
+  void publish_phase_();
+  void publish_sniff_();
   void start_command_(Command cmd);
   Target target_for_(Command cmd) const;
   const char *command_name_(Command cmd) const;
+  const char *phase_name_() const;
 
   void feed_byte_(uint8_t b, uint32_t now_ms);
   void finalize_frame_(uint32_t now_ms);
@@ -64,13 +73,19 @@ class AquareaCascade : public Component, public uart::UARTDevice {
   bool sniffed_matches_target_() const;
   void queue_writes_for_target_();
   bool send_next_write_();
+  void drain_rx_();
   static uint16_t crc16_(const uint8_t *data, size_t len);
   static uint16_t u16_be_(const uint8_t *p);
 
   uint8_t address_{1};
-  uint32_t idle_ms_{180};
+  uint32_t idle_ms_{80};
   uint32_t confirm_timeout_ms_{60000};
   text_sensor::TextSensor *result_sensor_{nullptr};
+  text_sensor::TextSensor *phase_sensor_{nullptr};
+  sensor::Sensor *sniff_op_sensor_{nullptr};
+  sensor::Sensor *sniff_mode_sensor_{nullptr};
+  sensor::Sensor *sniff_tank_sensor_{nullptr};
+  sensor::Sensor *rx_frames_sensor_{nullptr};
 
   Phase phase_{Phase::IDLE};
   Command pending_cmd_{Command::OFF};
@@ -82,7 +97,6 @@ class AquareaCascade : public Component, public uart::UARTDevice {
   uint8_t write_index_{0};
   std::vector<std::pair<uint16_t, uint16_t>> write_queue_;
 
-  // Sniffed HP1 holding regs from CMH FC03 responses
   bool have_op_{false};
   bool have_mode_{false};
   bool have_tank_{false};
@@ -90,16 +104,18 @@ class AquareaCascade : public Component, public uart::UARTDevice {
   uint16_t sniffed_mode_{0};
   uint16_t sniffed_tank_{0};
   uint32_t last_match_poll_ms_{0};
+  uint32_t rx_frames_{0};
+  uint32_t last_debug_publish_ms_{0};
 
-  // Frame reassembly
   static constexpr size_t kMaxFrame = 256;
   uint8_t frame_buf_[kMaxFrame]{};
   size_t frame_len_{0};
   uint32_t last_byte_ms_{0};
-  uint32_t last_bus_activity_ms_{0};
-  uint32_t frame_gap_ms_{4};
+  // Idle is measured from last completed frame end (not every RX byte),
+  // so dense CMH request/response pairs still leave a usable gap.
+  uint32_t last_frame_end_ms_{0};
+  uint32_t frame_gap_ms_{5};
 
-  // Track last FC03 request for this slave to interpret responses
   bool have_pending_read_{false};
   uint16_t pending_read_start_{0};
   uint16_t pending_read_count_{0};

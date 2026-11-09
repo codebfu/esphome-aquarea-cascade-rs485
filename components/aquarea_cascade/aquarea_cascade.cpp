@@ -1,5 +1,6 @@
 #include "aquarea_cascade.h"
 #include "esphome/core/log.h"
+#include "esphome/core/hal.h"
 
 namespace esphome {
 namespace aquarea_cascade {
@@ -7,8 +8,9 @@ namespace aquarea_cascade {
 static const char *const TAG = "aquarea_cascade";
 
 void AquareaCascade::setup() {
-  this->last_bus_activity_ms_ = millis();
+  this->last_frame_end_ms_ = millis();
   this->publish_result_("idle");
+  this->publish_phase_();
 }
 
 void AquareaCascade::dump_config() {
@@ -20,7 +22,7 @@ void AquareaCascade::dump_config() {
 
 void AquareaCascade::request_command(Command cmd) {
   if (this->phase_ != Phase::IDLE) {
-    ESP_LOGW(TAG, "Busy, ignoring new command");
+    ESP_LOGW(TAG, "Busy (%s), ignoring new command", this->phase_name_());
     return;
   }
   this->start_command_(cmd);
@@ -38,8 +40,9 @@ void AquareaCascade::start_command_(Command cmd) {
   char buf[48];
   snprintf(buf, sizeof(buf), "running:%s", this->command_name_(cmd));
   this->publish_result_(buf);
-  ESP_LOGI(TAG, "Start command %s (timeout %lu ms)", this->command_name_(cmd),
-           (unsigned long) this->confirm_timeout_ms_);
+  this->publish_phase_();
+  ESP_LOGI(TAG, "Start command %s (timeout %lu ms, idle %lu ms)", this->command_name_(cmd),
+           (unsigned long) this->confirm_timeout_ms_, (unsigned long) this->idle_ms_);
 }
 
 AquareaCascade::Target AquareaCascade::target_for_(Command cmd) const {
@@ -101,9 +104,22 @@ const char *AquareaCascade::command_name_(Command cmd) const {
   return "unknown";
 }
 
+const char *AquareaCascade::phase_name_() const {
+  switch (this->phase_) {
+    case Phase::IDLE:
+      return "idle";
+    case Phase::WAIT_IDLE:
+      return "wait_idle";
+    case Phase::WRITE:
+      return "write";
+    case Phase::CONFIRM:
+      return "confirm";
+  }
+  return "?";
+}
+
 void AquareaCascade::queue_writes_for_target_() {
   this->write_queue_.clear();
-  // Non-off: mode -> tank -> ON. Off: op only.
   if (this->pending_cmd_ == Command::OFF) {
     this->write_queue_.emplace_back(0, 0);
     return;
@@ -119,8 +135,29 @@ void AquareaCascade::publish_result_(const std::string &value) {
   }
 }
 
+void AquareaCascade::publish_phase_() {
+  if (this->phase_sensor_ != nullptr) {
+    this->phase_sensor_->publish_state(this->phase_name_());
+  }
+}
+
+void AquareaCascade::publish_sniff_() {
+  if (this->sniff_op_sensor_ != nullptr && this->have_op_)
+    this->sniff_op_sensor_->publish_state(this->sniffed_op_);
+  if (this->sniff_mode_sensor_ != nullptr && this->have_mode_)
+    this->sniff_mode_sensor_->publish_state(this->sniffed_mode_);
+  if (this->sniff_tank_sensor_ != nullptr && this->have_tank_)
+    this->sniff_tank_sensor_->publish_state(this->sniffed_tank_);
+  if (this->rx_frames_sensor_ != nullptr)
+    this->rx_frames_sensor_->publish_state(this->rx_frames_);
+}
+
 bool AquareaCascade::bus_idle_(uint32_t now_ms) const {
-  return (now_ms - this->last_bus_activity_ms_) >= this->idle_ms_;
+  // Prefer silence after a completed RTU frame; also treat "no bytes yet in buffer"
+  // so we do not wait forever if the bus is quiet.
+  if (this->frame_len_ > 0)
+    return false;
+  return (now_ms - this->last_frame_end_ms_) >= this->idle_ms_;
 }
 
 bool AquareaCascade::sniffed_matches_target_() const {
@@ -155,6 +192,17 @@ uint16_t AquareaCascade::crc16_(const uint8_t *data, size_t len) {
 
 uint16_t AquareaCascade::u16_be_(const uint8_t *p) { return (uint16_t(p[0]) << 8) | p[1]; }
 
+void AquareaCascade::drain_rx_() {
+  uint8_t b;
+  uint16_t n = 0;
+  while (this->available() && n < 512) {
+    if (!this->read_byte(&b))
+      break;
+    n++;
+  }
+  this->frame_len_ = 0;
+}
+
 bool AquareaCascade::send_next_write_() {
   if (this->write_index_ >= this->write_queue_.size())
     return true;
@@ -172,17 +220,19 @@ bool AquareaCascade::send_next_write_() {
   frame[6] = crc & 0xFF;
   frame[7] = (crc >> 8) & 0xFF;
 
+  this->drain_rx_();
   this->write_array(frame, sizeof(frame));
-  this->flush();
+  // Avoid flush(): on some esp-idf UART setups it can block the main loop.
+  delayMicroseconds(12000);  // ~8 bytes @ 9600 + margin
   this->last_write_ms_ = millis();
-  this->last_bus_activity_ms_ = this->last_write_ms_;
-  ESP_LOGD(TAG, "TX FC06 id=%u reg=%u val=%u", this->address_, (unsigned) reg, (unsigned) val);
+  this->last_frame_end_ms_ = this->last_write_ms_;
+  this->frame_len_ = 0;
+  ESP_LOGI(TAG, "TX FC06 id=%u reg=%u val=%u", this->address_, (unsigned) reg, (unsigned) val);
   this->write_index_++;
   return this->write_index_ >= this->write_queue_.size();
 }
 
 void AquareaCascade::feed_byte_(uint8_t b, uint32_t now_ms) {
-  this->last_bus_activity_ms_ = now_ms;
   if (this->frame_len_ > 0 && (now_ms - this->last_byte_ms_) >= this->frame_gap_ms_) {
     this->finalize_frame_(now_ms);
   }
@@ -199,7 +249,7 @@ void AquareaCascade::finalize_frame_(uint32_t now_ms) {
     this->handle_frame_(this->frame_buf_, this->frame_len_);
   }
   this->frame_len_ = 0;
-  (void) now_ms;
+  this->last_frame_end_ms_ = now_ms;
 }
 
 void AquareaCascade::handle_frame_(const uint8_t *data, size_t len) {
@@ -210,10 +260,10 @@ void AquareaCascade::handle_frame_(const uint8_t *data, size_t len) {
   if (crc_calc != crc_frame)
     return;
 
+  this->rx_frames_++;
   const uint8_t id = data[0];
   const uint8_t fc = data[1];
 
-  // CMH FC03 request: id fc start_hi start_lo count_hi count_lo crc crc
   if (id == this->address_ && fc == 0x03 && len == 8) {
     this->pending_read_start_ = u16_be_(data + 2);
     this->pending_read_count_ = u16_be_(data + 4);
@@ -221,20 +271,17 @@ void AquareaCascade::handle_frame_(const uint8_t *data, size_t len) {
     return;
   }
 
-  // FC03 response: id fc bytecount data... crc crc
   if (id == this->address_ && fc == 0x03 && len >= 5) {
     uint8_t bytecount = data[2];
     if (len != size_t(5 + bytecount))
       return;
-    if (!this->have_pending_read_) {
-      // Heuristic: 90-byte payload = 45 regs; assume start 0 if outdoor looks sane later
-      if (bytecount == 90) {
-        this->maybe_update_sniffed_state_(0, data + 3, bytecount);
-      }
+    uint16_t start = 0;
+    if (this->have_pending_read_) {
+      start = this->pending_read_start_;
+      this->have_pending_read_ = false;
+    } else if (bytecount != 90) {
       return;
     }
-    uint16_t start = this->pending_read_start_;
-    this->have_pending_read_ = false;
     this->maybe_update_sniffed_state_(start, data + 3, bytecount);
   }
 }
@@ -252,7 +299,6 @@ void AquareaCascade::maybe_update_sniffed_state_(uint16_t start_addr, const uint
     have = true;
   };
 
-  bool updated = false;
   uint16_t op = this->sniffed_op_, mode = this->sniffed_mode_, tank = this->sniffed_tank_;
   bool have_op = this->have_op_, have_mode = this->have_mode_, have_tank = this->have_tank_;
 
@@ -260,15 +306,14 @@ void AquareaCascade::maybe_update_sniffed_state_(uint16_t start_addr, const uint
   try_reg(4, mode, have_mode);
   try_reg(30, tank, have_tank);
 
-  // Sanity for block0: outdoor (reg1) if present should be plausible when start==0
   if (start_addr == 0 && payload_len >= 4) {
     int16_t outdoor = int16_t(u16_be_(payload + 2));
     if (outdoor < -40 || outdoor > 60) {
-      // Likely not status block 0 (truncated/collision) — ignore op/mode from this frame
       return;
     }
   }
 
+  bool updated = false;
   if (have_op && (!this->have_op_ || op != this->sniffed_op_))
     updated = true;
   if (have_mode && (!this->have_mode_ || mode != this->sniffed_mode_))
@@ -284,8 +329,10 @@ void AquareaCascade::maybe_update_sniffed_state_(uint16_t start_addr, const uint
   this->have_tank_ = have_tank;
 
   if (updated) {
-    ESP_LOGD(TAG, "Sniffed HP1 op=%u mode=%u tank=%u", (unsigned) this->sniffed_op_,
-             (unsigned) this->sniffed_mode_, (unsigned) this->sniffed_tank_);
+    ESP_LOGI(TAG, "Sniffed HP1 op=%u mode=%u tank=%u (frames=%lu)", (unsigned) this->sniffed_op_,
+             (unsigned) this->sniffed_mode_, (unsigned) this->sniffed_tank_,
+             (unsigned long) this->rx_frames_);
+    this->publish_sniff_();
   }
 
   if (this->phase_ == Phase::CONFIRM && this->sniffed_matches_target_()) {
@@ -302,7 +349,9 @@ void AquareaCascade::maybe_update_sniffed_state_(uint16_t start_addr, const uint
 void AquareaCascade::loop() {
   const uint32_t now = millis();
 
-  while (this->available()) {
+  // Cap bytes per loop to avoid starving WiFi / WDT under noisy RX.
+  uint16_t budget = 128;
+  while (budget-- && this->available()) {
     uint8_t b;
     if (!this->read_byte(&b))
       break;
@@ -312,13 +361,24 @@ void AquareaCascade::loop() {
     this->finalize_frame_(now);
   }
 
+  if (now - this->last_debug_publish_ms_ >= 5000) {
+    this->last_debug_publish_ms_ = now;
+    this->publish_phase_();
+    this->publish_sniff_();
+    ESP_LOGD(TAG, "dbg phase=%s frames=%lu idle_ago=%lu have_op=%d", this->phase_name_(),
+             (unsigned long) this->rx_frames_, (unsigned long) (now - this->last_frame_end_ms_),
+             (int) this->have_op_);
+  }
+
   if (this->phase_ == Phase::IDLE)
     return;
 
   if (now - this->command_started_ms_ >= this->confirm_timeout_ms_) {
-    ESP_LOGW(TAG, "Command %s timed out", this->command_name_(this->pending_cmd_));
+    ESP_LOGW(TAG, "Command %s timed out (phase=%s frames=%lu)", this->command_name_(this->pending_cmd_),
+             this->phase_name_(), (unsigned long) this->rx_frames_);
     this->publish_result_("timeout");
     this->phase_ = Phase::IDLE;
+    this->publish_phase_();
     return;
   }
 
@@ -327,24 +387,25 @@ void AquareaCascade::loop() {
       if (this->bus_idle_(now)) {
         this->write_index_ = 0;
         this->phase_ = Phase::WRITE;
+        this->publish_phase_();
+        ESP_LOGI(TAG, "Bus idle — writing");
       }
       break;
 
-    case Phase::WRITE:
-      // Space writes slightly; require idle before each frame
-      if (!this->bus_idle_(now) && this->write_index_ > 0 && (now - this->last_write_ms_) < 50)
-        break;
-      if (!this->bus_idle_(now) && this->write_index_ == 0)
+    case Phase::WRITE: {
+      // After first register, only need a short gap (~50ms) before the next.
+      uint32_t need = this->write_index_ == 0 ? this->idle_ms_ : 50;
+      if ((now - this->last_frame_end_ms_) < need || this->frame_len_ > 0)
         break;
       if (this->send_next_write_()) {
         this->phase_ = Phase::CONFIRM;
         this->match_streak_ = 0;
         this->last_rewrite_ms_ = now;
-      } else {
-        // wait a bit before next register write
-        this->last_bus_activity_ms_ = now;
+        this->publish_phase_();
+        ESP_LOGI(TAG, "Writes done — confirming via CMH sniff");
       }
       break;
+    }
 
     case Phase::CONFIRM:
       if (this->match_streak_ >= 2) {
@@ -356,15 +417,20 @@ void AquareaCascade::loop() {
                  (unsigned long) elapsed);
         this->publish_result_(buf);
         this->phase_ = Phase::IDLE;
+        this->publish_phase_();
         break;
       }
-      // Rewrite every ~2s if not yet matching (smart, not flood)
       if (now - this->last_rewrite_ms_ >= 2000) {
-        ESP_LOGD(TAG, "Rewrite %s (no stable match yet)", this->command_name_(this->pending_cmd_));
+        ESP_LOGI(TAG, "Rewrite %s (no stable match, op=%d mode=%d tank=%d)",
+                 this->command_name_(this->pending_cmd_),
+                 this->have_op_ ? (int) this->sniffed_op_ : -1,
+                 this->have_mode_ ? (int) this->sniffed_mode_ : -1,
+                 this->have_tank_ ? (int) this->sniffed_tank_ : -1);
         this->queue_writes_for_target_();
         this->write_index_ = 0;
         this->phase_ = Phase::WAIT_IDLE;
         this->last_rewrite_ms_ = now;
+        this->publish_phase_();
       }
       break;
 

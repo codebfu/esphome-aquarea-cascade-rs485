@@ -1,11 +1,11 @@
 import esphome.codegen as cg
-from esphome.components import text_sensor, uart
+from esphome.components import sensor, text_sensor, uart
 import esphome.config_validation as cv
 from esphome.const import CONF_ID, CONF_TIMEOUT
 
 CODEOWNERS = ["@codebfu"]
 DEPENDENCIES = ["uart"]
-AUTO_LOAD = ["text_sensor"]
+AUTO_LOAD = ["text_sensor", "sensor"]
 MULTI_CONF = False
 
 CONF_AQUAREA_CASCADE_ID = "aquarea_cascade_id"
@@ -30,7 +30,7 @@ CONFIG_SCHEMA = (
         {
             cv.GenerateID(): cv.declare_id(AquareaCascade),
             cv.Optional(CONF_ADDRESS, default=1): cv.int_range(min=1, max=247),
-            cv.Optional(CONF_IDLE_TIME, default="180ms"): cv.positive_time_period_milliseconds,
+            cv.Optional(CONF_IDLE_TIME, default="80ms"): cv.positive_time_period_milliseconds,
             cv.Optional(CONF_TIMEOUT, default="60s"): cv.positive_time_period_milliseconds,
         }
     )
