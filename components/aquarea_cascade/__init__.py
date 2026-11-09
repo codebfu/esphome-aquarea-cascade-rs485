@@ -11,6 +11,7 @@ MULTI_CONF = False
 CONF_AQUAREA_CASCADE_ID = "aquarea_cascade_id"
 CONF_IDLE_TIME = "idle_time"
 CONF_ADDRESS = "address"
+CONF_DRY_RUN = "dry_run"
 
 aquarea_cascade_ns = cg.esphome_ns.namespace("aquarea_cascade")
 AquareaCascade = aquarea_cascade_ns.class_("AquareaCascade", cg.Component, uart.UARTDevice)
@@ -32,6 +33,7 @@ CONFIG_SCHEMA = (
             cv.Optional(CONF_ADDRESS, default=1): cv.int_range(min=1, max=247),
             cv.Optional(CONF_IDLE_TIME, default="80ms"): cv.positive_time_period_milliseconds,
             cv.Optional(CONF_TIMEOUT, default="60s"): cv.positive_time_period_milliseconds,
+            cv.Optional(CONF_DRY_RUN, default=False): cv.boolean,
         }
     )
     .extend(uart.UART_DEVICE_SCHEMA)
@@ -46,3 +48,4 @@ async def to_code(config):
     cg.add(var.set_address(config[CONF_ADDRESS]))
     cg.add(var.set_idle_ms(config[CONF_IDLE_TIME].total_milliseconds))
     cg.add(var.set_confirm_timeout_ms(config[CONF_TIMEOUT].total_milliseconds))
+    cg.add(var.set_dry_run(config[CONF_DRY_RUN]))

@@ -49,6 +49,8 @@ aquarea_cascade:
   address: 1
   idle_time: 80ms
   timeout: 60s
+  # Set true to isolate crashes: runs state machine without RS485 TX.
+  dry_run: true
 
 text_sensor:
   - platform: aquarea_cascade

@@ -2,6 +2,7 @@
 #include "esphome/core/log.h"
 #include "esphome/core/hal.h"
 #include <esp_system.h>
+#include <esp_ota_ops.h>
 
 namespace esphome {
 namespace aquarea_cascade {
@@ -36,13 +37,23 @@ static const char *reset_reason_str_() {
 }
 
 void AquareaCascade::setup() {
+  // Prevent esp-idf app rollback if we crash later during bus tests.
+  const esp_partition_t *running = esp_ota_get_running_partition();
+  esp_ota_img_states_t ota_state;
+  if (running != nullptr && esp_ota_get_state_partition(running, &ota_state) == ESP_OK) {
+    if (ota_state == ESP_OTA_IMG_PENDING_VERIFY) {
+      esp_ota_mark_app_valid_cancel_rollback();
+      ESP_LOGI(TAG, "OTA app marked valid (cancel rollback)");
+    }
+  }
+
   this->last_frame_end_ms_ = millis();
   this->publish_result_("idle");
   this->publish_phase_();
   if (this->reset_reason_sensor_ != nullptr) {
     this->reset_reason_sensor_->publish_state(reset_reason_str_());
   }
-  ESP_LOGI(TAG, "Boot reset_reason=%s", reset_reason_str_());
+  ESP_LOGI(TAG, "Boot reset_reason=%s dry_run=%d", reset_reason_str_(), (int) this->dry_run_);
 }
 
 void AquareaCascade::dump_config() {
@@ -246,6 +257,17 @@ bool AquareaCascade::send_next_write_() {
 
   auto reg = this->write_regs_[this->write_index_];
   auto val = this->write_vals_[this->write_index_];
+
+  if (this->dry_run_) {
+    ESP_LOGI(TAG, "DRY_RUN skip TX FC06 id=%u reg=%u val=%u", this->address_, (unsigned) reg,
+             (unsigned) val);
+    this->last_write_ms_ = millis();
+    this->tx_holdoff_until_ms_ = this->last_write_ms_ + 15;
+    this->last_frame_end_ms_ = this->last_write_ms_;
+    this->write_index_++;
+    return this->write_index_ >= this->write_count_;
+  }
+
   uint8_t frame[8];
   frame[0] = this->address_;
   frame[1] = 0x06;
