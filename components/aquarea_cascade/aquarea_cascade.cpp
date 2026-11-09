@@ -469,15 +469,22 @@ void AquareaCascade::loop() {
   }
 
   // Cap bytes per loop to avoid starving WiFi / WDT under noisy RX.
-  uint16_t budget = 128;
+  // Use a fresh millis() for each byte — a stale `now` from loop start makes
+  // (now - last_byte_ms_) underflow once millis advances during the read, which
+  // falsely gap-finalizes mid-frame and permanently breaks long FC03 responses
+  // (CMH bulk read = 95 bytes) while short 8-byte frames still inflate rx_frames.
+  uint16_t budget = 256;
   while (budget-- && this->available()) {
     uint8_t b;
     if (!this->read_byte(&b))
       break;
-    this->feed_byte_(b, now);
+    this->feed_byte_(b, millis());
   }
-  if (this->frame_len_ > 0 && (now - this->last_byte_ms_) >= this->frame_gap_ms_) {
-    this->finalize_frame_(now);
+  if (this->frame_len_ > 0 && !this->available()) {
+    uint32_t t = millis();
+    if ((t - this->last_byte_ms_) >= this->frame_gap_ms_) {
+      this->finalize_frame_(t);
+    }
   }
 
   if (now - this->last_debug_publish_ms_ >= 5000) {
