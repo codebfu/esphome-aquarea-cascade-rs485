@@ -6,8 +6,6 @@
 #include "esphome/components/text_sensor/text_sensor.h"
 #include "esphome/components/sensor/sensor.h"
 
-#include <vector>
-
 namespace esphome {
 namespace aquarea_cascade {
 
@@ -95,7 +93,13 @@ class AquareaCascade : public Component, public uart::UARTDevice {
   uint32_t last_rewrite_ms_{0};
   uint8_t match_streak_{0};
   uint8_t write_index_{0};
-  std::vector<std::pair<uint16_t, uint16_t>> write_queue_;
+  uint8_t write_count_{0};
+  uint16_t write_regs_[4]{};
+  uint16_t write_vals_[4]{};
+
+  // Button/API may call request_command off the main loop — defer via flag.
+  bool queued_cmd_valid_{false};
+  Command queued_cmd_{Command::OFF};
 
   bool have_op_{false};
   bool have_mode_{false};
@@ -114,7 +118,7 @@ class AquareaCascade : public Component, public uart::UARTDevice {
   // Idle is measured from last completed frame end (not every RX byte),
   // so dense CMH request/response pairs still leave a usable gap.
   uint32_t last_frame_end_ms_{0};
-  uint32_t frame_gap_ms_{5};
+  uint32_t frame_gap_ms_{3};
 
   bool have_pending_read_{false};
   uint16_t pending_read_start_{0};

@@ -21,11 +21,9 @@ void AquareaCascade::dump_config() {
 }
 
 void AquareaCascade::request_command(Command cmd) {
-  if (this->phase_ != Phase::IDLE) {
-    ESP_LOGW(TAG, "Busy (%s), ignoring new command", this->phase_name_());
-    return;
-  }
-  this->start_command_(cmd);
+  // Safe to call from button/API thread: only set a flag for loop().
+  this->queued_cmd_ = cmd;
+  this->queued_cmd_valid_ = true;
 }
 
 void AquareaCascade::start_command_(Command cmd) {
@@ -119,14 +117,21 @@ const char *AquareaCascade::phase_name_() const {
 }
 
 void AquareaCascade::queue_writes_for_target_() {
-  this->write_queue_.clear();
+  this->write_count_ = 0;
+  auto push = [&](uint16_t reg, uint16_t val) {
+    if (this->write_count_ >= 4)
+      return;
+    this->write_regs_[this->write_count_] = reg;
+    this->write_vals_[this->write_count_] = val;
+    this->write_count_++;
+  };
   if (this->pending_cmd_ == Command::OFF) {
-    this->write_queue_.emplace_back(0, 0);
+    push(0, 0);
     return;
   }
-  this->write_queue_.emplace_back(4, this->target_.mode);
-  this->write_queue_.emplace_back(30, this->target_.tank);
-  this->write_queue_.emplace_back(0, this->target_.op);
+  push(4, this->target_.mode);
+  push(30, this->target_.tank);
+  push(0, this->target_.op);
 }
 
 void AquareaCascade::publish_result_(const std::string &value) {
@@ -204,11 +209,11 @@ void AquareaCascade::drain_rx_() {
 }
 
 bool AquareaCascade::send_next_write_() {
-  if (this->write_index_ >= this->write_queue_.size())
+  if (this->write_index_ >= this->write_count_)
     return true;
 
-  auto reg = this->write_queue_[this->write_index_].first;
-  auto val = this->write_queue_[this->write_index_].second;
+  auto reg = this->write_regs_[this->write_index_];
+  auto val = this->write_vals_[this->write_index_];
   uint8_t frame[8];
   frame[0] = this->address_;
   frame[1] = 0x06;
@@ -229,7 +234,7 @@ bool AquareaCascade::send_next_write_() {
   this->frame_len_ = 0;
   ESP_LOGI(TAG, "TX FC06 id=%u reg=%u val=%u", this->address_, (unsigned) reg, (unsigned) val);
   this->write_index_++;
-  return this->write_index_ >= this->write_queue_.size();
+  return this->write_index_ >= this->write_count_;
 }
 
 void AquareaCascade::feed_byte_(uint8_t b, uint32_t now_ms) {
@@ -241,6 +246,33 @@ void AquareaCascade::feed_byte_(uint8_t b, uint32_t now_ms) {
     this->frame_buf_[this->frame_len_++] = b;
   } else {
     this->frame_len_ = 0;
+    this->frame_buf_[this->frame_len_++] = b;
+  }
+
+  // Cut frames as soon as a complete Modbus RTU PDU is present — CMH
+  // request→response turnaround can be <5 ms, so gap-only framing merges them.
+  if (this->frame_len_ >= 8) {
+    const uint8_t fc = this->frame_buf_[1];
+    if ((fc == 0x03 || fc == 0x06 || fc == 0x10) && this->frame_len_ == 8) {
+      uint16_t crc_calc = crc16_(this->frame_buf_, 6);
+      uint16_t crc_frame = uint16_t(this->frame_buf_[6]) | (uint16_t(this->frame_buf_[7]) << 8);
+      if (crc_calc == crc_frame) {
+        this->finalize_frame_(now_ms);
+        return;
+      }
+    }
+  }
+  if (this->frame_len_ >= 5 && this->frame_buf_[1] == 0x03) {
+    uint8_t bytecount = this->frame_buf_[2];
+    size_t need = size_t(5) + bytecount;
+    if (bytecount > 0 && bytecount <= 250 && this->frame_len_ == need) {
+      uint16_t crc_calc = crc16_(this->frame_buf_, need - 2);
+      uint16_t crc_frame =
+          uint16_t(this->frame_buf_[need - 2]) | (uint16_t(this->frame_buf_[need - 1]) << 8);
+      if (crc_calc == crc_frame) {
+        this->finalize_frame_(now_ms);
+      }
+    }
   }
 }
 
@@ -348,6 +380,16 @@ void AquareaCascade::maybe_update_sniffed_state_(uint16_t start_addr, const uint
 
 void AquareaCascade::loop() {
   const uint32_t now = millis();
+
+  if (this->queued_cmd_valid_) {
+    this->queued_cmd_valid_ = false;
+    Command cmd = this->queued_cmd_;
+    if (this->phase_ != Phase::IDLE) {
+      ESP_LOGW(TAG, "Busy (%s), ignoring queued command", this->phase_name_());
+    } else {
+      this->start_command_(cmd);
+    }
+  }
 
   // Cap bytes per loop to avoid starving WiFi / WDT under noisy RX.
   uint16_t budget = 128;
