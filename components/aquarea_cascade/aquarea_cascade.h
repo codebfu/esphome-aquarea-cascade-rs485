@@ -24,6 +24,7 @@ class AquareaCascade : public Component, public uart::UARTDevice {
   void set_idle_ms(uint32_t idle_ms) { this->idle_ms_ = idle_ms; }
   void set_confirm_timeout_ms(uint32_t ms) { this->confirm_timeout_ms_ = ms; }
   void set_dry_run(bool dry_run) { this->dry_run_ = dry_run; }
+  bool is_dry_run() const { return this->dry_run_; }
   void set_result_sensor(text_sensor::TextSensor *sensor) { this->result_sensor_ = sensor; }
   void set_phase_sensor(text_sensor::TextSensor *sensor) { this->phase_sensor_ = sensor; }
   void set_reset_reason_sensor(text_sensor::TextSensor *sensor) { this->reset_reason_sensor_ = sensor; }
