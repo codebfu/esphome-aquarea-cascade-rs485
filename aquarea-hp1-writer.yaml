@@ -1,0 +1,82 @@
+esphome:
+  name: aquarea-hp1-writer
+  friendly_name: Aquarea HP1 Writer
+  comment: RS485 interleaved writes to Panasonic Aquarea HP1 (CZ-NSMB)
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+logger:
+  level: INFO
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "Aquarea-HP1-Fallback"
+    password: !secret fallback_password
+
+captive_portal:
+
+external_components:
+  - source:
+      type: local
+      path: components
+
+uart:
+  id: rs485_uart
+  tx_pin: GPIO17
+  rx_pin: GPIO16
+  baud_rate: 9600
+  data_bits: 8
+  parity: NONE
+  stop_bits: 1
+  rx_buffer_size: 512
+
+aquarea_cascade:
+  id: hp1_writer
+  uart_id: rs485_uart
+  address: 1
+  idle_time: 180ms
+  timeout: 60s
+
+text_sensor:
+  - platform: aquarea_cascade
+    name: "HP1 Command Result"
+    id: hp1_last_result
+
+button:
+  - platform: aquarea_cascade
+    name: "HP1 Off"
+    id: hp1_off
+    command: "off"
+  - platform: aquarea_cascade
+    name: "HP1 Heat"
+    id: hp1_heat
+    command: "heat"
+  - platform: aquarea_cascade
+    name: "HP1 Cool"
+    id: hp1_cool
+    command: "cool"
+  - platform: aquarea_cascade
+    name: "HP1 ECS"
+    id: hp1_ecs
+    command: "ecs"
+  - platform: aquarea_cascade
+    name: "HP1 Heat+ECS"
+    id: hp1_heat_ecs
+    command: "heat_ecs"
+  - platform: aquarea_cascade
+    name: "HP1 Cool+ECS"
+    id: hp1_cool_ecs
+    command: "cool_ecs"
