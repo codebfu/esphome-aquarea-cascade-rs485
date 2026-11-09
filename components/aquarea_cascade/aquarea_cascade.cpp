@@ -37,7 +37,7 @@ static const char *reset_reason_str_() {
 }
 
 void AquareaCascade::setup() {
-  // Prevent esp-idf app rollback if we crash later during bus tests.
+  // Cancel esp-idf OTA rollback once the app is running.
   const esp_partition_t *running = esp_ota_get_running_partition();
   esp_ota_img_states_t ota_state;
   if (running != nullptr && esp_ota_get_state_partition(running, &ota_state) == ESP_OK) {
@@ -48,15 +48,12 @@ void AquareaCascade::setup() {
   }
 
   this->last_frame_end_ms_ = millis();
+  this->publish_result_("idle");
+  this->publish_phase_();
   if (this->reset_reason_sensor_ != nullptr) {
     this->reset_reason_sensor_->publish_state(reset_reason_str_());
   }
-  // Visible in HA without serial: proves which firmware/flags are running.
-  char boot[48];
-  snprintf(boot, sizeof(boot), "boot:%s:dry_run=%d", reset_reason_str_(), (int) this->dry_run_);
-  this->publish_result_(boot);
-  this->publish_phase_();
-  ESP_LOGI(TAG, "Boot reset_reason=%s dry_run=%d", reset_reason_str_(), (int) this->dry_run_);
+  ESP_LOGI(TAG, "Boot reset_reason=%s", reset_reason_str_());
 }
 
 void AquareaCascade::dump_config() {
@@ -64,19 +61,9 @@ void AquareaCascade::dump_config() {
   ESP_LOGCONFIG(TAG, "  Address: %u", this->address_);
   ESP_LOGCONFIG(TAG, "  Idle gap: %lu ms", (unsigned long) this->idle_ms_);
   ESP_LOGCONFIG(TAG, "  Confirm timeout: %lu ms", (unsigned long) this->confirm_timeout_ms_);
-  ESP_LOGCONFIG(TAG, "  Dry run: %s", this->dry_run_ ? "YES" : "NO");
 }
 
 void AquareaCascade::request_command(Command cmd) {
-  // dry_run: absolute no-op (no publish, no queue, no UART).
-  // If a button press still poweron-resets, the fault is outside this component
-  // (API/WiFi/power rail), not RS485 logic.
-  if (this->dry_run_) {
-    this->dry_run_press_count_++;
-    ESP_LOGI(TAG, "DRY_RUN noop press #%lu cmd=%s", (unsigned long) this->dry_run_press_count_,
-             this->command_name_(cmd));
-    return;
-  }
   // Safe to call from button/API thread: only set a flag for loop().
   this->queued_cmd_ = cmd;
   this->queued_cmd_valid_ = true;
@@ -89,19 +76,6 @@ void AquareaCascade::start_command_(Command cmd) {
   this->last_rewrite_ms_ = 0;
   this->match_streak_ = 0;
   this->write_index_ = 0;
-  this->write_count_ = 0;
-
-  // Isolation path: no queue, no UART TX, no wait-idle, no sniff.
-  if (this->dry_run_) {
-    char buf[48];
-    snprintf(buf, sizeof(buf), "ok:dry_run:%s:0ms", this->command_name_(cmd));
-    this->phase_ = Phase::IDLE;
-    this->publish_result_(buf);
-    this->publish_phase_();
-    ESP_LOGI(TAG, "DRY_RUN immediate ok for %s (no bus I/O)", this->command_name_(cmd));
-    return;
-  }
-
   this->queue_writes_for_target_();
   this->phase_ = Phase::WAIT_IDLE;
   char buf[48];
@@ -120,12 +94,14 @@ AquareaCascade::Target AquareaCascade::target_for_(Command cmd) const {
       t.op = 0;
       break;
     case Command::HEAT:
+      // Heat alone: space heat mode + ECS off.
       t.check_op = t.check_mode = t.check_tank = true;
       t.op = 1;
       t.mode = 1;
       t.tank = 0;
       break;
     case Command::COOL:
+      // Cool alone: space cool mode + ECS off.
       t.check_op = t.check_mode = t.check_tank = true;
       t.op = 1;
       t.mode = 5;
@@ -198,8 +174,9 @@ void AquareaCascade::queue_writes_for_target_() {
     push(0, 0);
     return;
   }
-  push(4, this->target_.mode);
+  // Tank first so Heat/Cool alone clear ECS before applying space mode.
   push(30, this->target_.tank);
+  push(4, this->target_.mode);
   push(0, this->target_.op);
 }
 
@@ -283,16 +260,6 @@ bool AquareaCascade::send_next_write_() {
 
   auto reg = this->write_regs_[this->write_index_];
   auto val = this->write_vals_[this->write_index_];
-
-  if (this->dry_run_) {
-    ESP_LOGI(TAG, "DRY_RUN skip TX FC06 id=%u reg=%u val=%u", this->address_, (unsigned) reg,
-             (unsigned) val);
-    this->last_write_ms_ = millis();
-    this->tx_holdoff_until_ms_ = this->last_write_ms_ + 15;
-    this->last_frame_end_ms_ = this->last_write_ms_;
-    this->write_index_++;
-    return this->write_index_ >= this->write_count_;
-  }
 
   uint8_t frame[8];
   frame[0] = this->address_;
@@ -471,20 +438,6 @@ void AquareaCascade::loop() {
     }
   }
 
-  // dry_run: skip UART RX entirely (CMH traffic can be heavy).
-  if (this->dry_run_) {
-    if (now - this->last_debug_publish_ms_ >= 5000) {
-      this->last_debug_publish_ms_ = now;
-      this->publish_phase_();
-      // Prove noop presses were received without touching button publish path.
-      char buf[40];
-      snprintf(buf, sizeof(buf), "boot:dry_run=1:presses=%lu",
-               (unsigned long) this->dry_run_press_count_);
-      this->publish_result_(buf);
-    }
-    return;
-  }
-
   // Cap bytes per loop to avoid starving WiFi / WDT under noisy RX.
   uint16_t budget = 128;
   while (budget-- && this->available()) {
@@ -536,18 +489,6 @@ void AquareaCascade::loop() {
       if ((now - this->last_frame_end_ms_) < need || this->frame_len_ > 0)
         break;
       if (this->send_next_write_()) {
-        if (this->dry_run_) {
-          uint32_t elapsed = now - this->command_started_ms_;
-          char buf[48];
-          snprintf(buf, sizeof(buf), "ok:dry_run:%s:%lums", this->command_name_(this->pending_cmd_),
-                   (unsigned long) elapsed);
-          ESP_LOGI(TAG, "DRY_RUN complete %s in %lu ms (no TX, no sniff confirm)",
-                   this->command_name_(this->pending_cmd_), (unsigned long) elapsed);
-          this->publish_result_(buf);
-          this->phase_ = Phase::IDLE;
-          this->publish_phase_();
-          break;
-        }
         this->phase_ = Phase::CONFIRM;
         this->match_streak_ = 0;
         this->last_rewrite_ms_ = now;

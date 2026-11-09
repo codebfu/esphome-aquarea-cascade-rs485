@@ -14,10 +14,9 @@ class AquareaCascadeButton : public button::Button, public Component {
 
  protected:
   void press_action() override {
-    // dry_run: return without touching parent (no log, no publish, no queue).
-    if (this->parent_ == nullptr || this->parent_->is_dry_run())
-      return;
-    this->parent_->request_command(this->command_);
+    if (this->parent_ != nullptr) {
+      this->parent_->request_command(this->command_);
+    }
   }
 
   AquareaCascade *parent_{nullptr};

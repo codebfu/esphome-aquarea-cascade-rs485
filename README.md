@@ -17,7 +17,7 @@ Slave target: **Modbus id 1 (HP1)** only. HP2+ stay under CMH control.
 ## Behaviour
 
 1. RX sniff of CMH FC03 traffic (always).
-2. On button press: wait for bus idle ≥ 180 ms, send FC06 writes, return to sniff.
+2. On button press: wait for bus idle ≥ 80 ms, send FC06 writes, return to sniff.
 3. Confirm target state from **CMH poll responses** (HR0 / HR4 / HR30) — no active master reads while CMH is up.
 4. Rewrite every ~2 s until match is stable (2 polls) or **timeout 60 s**.
 5. `text_sensor` **HP1 Command Result**: `idle` / `running:…` / `ok:…:Nms` / `timeout`.
@@ -27,13 +27,13 @@ Slave target: **Modbus id 1 (HP1)** only. HP2+ stay under CMH control.
 | Button | HR4 mode | HR30 tank | HR0 |
 |--------|----------|-----------|-----|
 | Off | — | — | 0 |
-| Heat | 1 | 0 | 1 |
-| Cool | 5 | 0 | 1 |
+| Heat | 1 | **0 (ECS off)** | 1 |
+| Cool | 5 | **0 (ECS off)** | 1 |
 | ECS | 3 (Tank) | 1 | 1 |
 | Heat+ECS | 2 | 1 | 1 |
 | Cool+ECS | 4 | 1 | 1 |
 
-Write order (non-off): mode → tank → ON.
+Write order (non-off): **tank → mode → ON** (Heat/Cool alone clear ECS before applying space mode).
 
 ## Home Assistant
 
