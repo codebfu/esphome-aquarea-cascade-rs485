@@ -48,11 +48,14 @@ void AquareaCascade::setup() {
   }
 
   this->last_frame_end_ms_ = millis();
-  this->publish_result_("idle");
-  this->publish_phase_();
   if (this->reset_reason_sensor_ != nullptr) {
     this->reset_reason_sensor_->publish_state(reset_reason_str_());
   }
+  // Visible in HA without serial: proves which firmware/flags are running.
+  char boot[48];
+  snprintf(boot, sizeof(boot), "boot:%s:dry_run=%d", reset_reason_str_(), (int) this->dry_run_);
+  this->publish_result_(boot);
+  this->publish_phase_();
   ESP_LOGI(TAG, "Boot reset_reason=%s dry_run=%d", reset_reason_str_(), (int) this->dry_run_);
 }
 
@@ -61,6 +64,7 @@ void AquareaCascade::dump_config() {
   ESP_LOGCONFIG(TAG, "  Address: %u", this->address_);
   ESP_LOGCONFIG(TAG, "  Idle gap: %lu ms", (unsigned long) this->idle_ms_);
   ESP_LOGCONFIG(TAG, "  Confirm timeout: %lu ms", (unsigned long) this->confirm_timeout_ms_);
+  ESP_LOGCONFIG(TAG, "  Dry run: %s", this->dry_run_ ? "YES" : "NO");
 }
 
 void AquareaCascade::request_command(Command cmd) {
@@ -76,20 +80,20 @@ void AquareaCascade::start_command_(Command cmd) {
   this->last_rewrite_ms_ = 0;
   this->match_streak_ = 0;
   this->write_index_ = 0;
-  this->queue_writes_for_target_();
+  this->write_count_ = 0;
 
-  // Isolation path: never touch UART TX / wait-idle / sniff confirm.
+  // Isolation path: no queue, no UART TX, no wait-idle, no sniff.
   if (this->dry_run_) {
     char buf[48];
     snprintf(buf, sizeof(buf), "ok:dry_run:%s:0ms", this->command_name_(cmd));
     this->phase_ = Phase::IDLE;
     this->publish_result_(buf);
     this->publish_phase_();
-    ESP_LOGI(TAG, "DRY_RUN immediate ok for %s (queued %u writes, no bus I/O)",
-             this->command_name_(cmd), (unsigned) this->write_count_);
+    ESP_LOGI(TAG, "DRY_RUN immediate ok for %s (no bus I/O)", this->command_name_(cmd));
     return;
   }
 
+  this->queue_writes_for_target_();
   this->phase_ = Phase::WAIT_IDLE;
   char buf[48];
   snprintf(buf, sizeof(buf), "running:%s", this->command_name_(cmd));
