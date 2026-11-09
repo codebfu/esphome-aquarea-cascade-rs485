@@ -14,8 +14,8 @@ void AquareaCascade::setup() {
 void AquareaCascade::dump_config() {
   ESP_LOGCONFIG(TAG, "Aquarea Cascade RS485 writer:");
   ESP_LOGCONFIG(TAG, "  Address: %u", this->address_);
-  ESP_LOGCONFIG(TAG, "  Idle gap: %u ms", this->idle_ms_);
-  ESP_LOGCONFIG(TAG, "  Confirm timeout: %u ms", this->confirm_timeout_ms_);
+  ESP_LOGCONFIG(TAG, "  Idle gap: %lu ms", (unsigned long) this->idle_ms_);
+  ESP_LOGCONFIG(TAG, "  Confirm timeout: %lu ms", (unsigned long) this->confirm_timeout_ms_);
 }
 
 void AquareaCascade::request_command(Command cmd) {
@@ -38,7 +38,8 @@ void AquareaCascade::start_command_(Command cmd) {
   char buf[48];
   snprintf(buf, sizeof(buf), "running:%s", this->command_name_(cmd));
   this->publish_result_(buf);
-  ESP_LOGI(TAG, "Start command %s (timeout %u ms)", this->command_name_(cmd), this->confirm_timeout_ms_);
+  ESP_LOGI(TAG, "Start command %s (timeout %lu ms)", this->command_name_(cmd),
+           (unsigned long) this->confirm_timeout_ms_);
 }
 
 AquareaCascade::Target AquareaCascade::target_for_(Command cmd) const {
@@ -175,7 +176,7 @@ bool AquareaCascade::send_next_write_() {
   this->flush();
   this->last_write_ms_ = millis();
   this->last_bus_activity_ms_ = this->last_write_ms_;
-  ESP_LOGD(TAG, "TX FC06 id=%u reg=%u val=%u", this->address_, reg, val);
+  ESP_LOGD(TAG, "TX FC06 id=%u reg=%u val=%u", this->address_, (unsigned) reg, (unsigned) val);
   this->write_index_++;
   return this->write_index_ >= this->write_queue_.size();
 }
@@ -283,8 +284,8 @@ void AquareaCascade::maybe_update_sniffed_state_(uint16_t start_addr, const uint
   this->have_tank_ = have_tank;
 
   if (updated) {
-    ESP_LOGD(TAG, "Sniffed HP1 op=%u mode=%u tank=%u", this->sniffed_op_, this->sniffed_mode_,
-             this->sniffed_tank_);
+    ESP_LOGD(TAG, "Sniffed HP1 op=%u mode=%u tank=%u", (unsigned) this->sniffed_op_,
+             (unsigned) this->sniffed_mode_, (unsigned) this->sniffed_tank_);
   }
 
   if (this->phase_ == Phase::CONFIRM && this->sniffed_matches_target_()) {
