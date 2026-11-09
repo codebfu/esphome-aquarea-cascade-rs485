@@ -2,7 +2,7 @@
 
 #include "esphome/components/button/button.h"
 #include "esphome/core/component.h"
-#include "../aquarea_cascade.h"
+#include "aquarea_cascade.h"
 
 namespace esphome {
 namespace aquarea_cascade {

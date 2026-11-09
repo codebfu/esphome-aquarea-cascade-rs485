@@ -1,9 +1,13 @@
 import esphome.codegen as cg
 from esphome.components import sensor
 import esphome.config_validation as cv
-from esphome.const import CONF_ID, STATE_CLASS_MEASUREMENT, ENTITY_CATEGORY_DIAGNOSTIC
+from esphome.const import (
+    CONF_ID,
+    ENTITY_CATEGORY_DIAGNOSTIC,
+    STATE_CLASS_MEASUREMENT,
+)
 
-from .. import CONF_AQUAREA_CASCADE_ID, AquareaCascade, aquarea_cascade_ns
+from . import CONF_AQUAREA_CASCADE_ID, AquareaCascade, aquarea_cascade_ns
 
 DEPENDENCIES = ["aquarea_cascade"]
 
@@ -16,7 +20,9 @@ TYPES = {
     "rx_frames": "set_rx_frames_sensor",
 }
 
-AquareaCascadeSensor = aquarea_cascade_ns.class_("AquareaCascadeSensor", sensor.Sensor, cg.Component)
+AquareaCascadeSensor = aquarea_cascade_ns.class_(
+    "AquareaCascadeSensor", sensor.Sensor, cg.Component
+)
 
 CONFIG_SCHEMA = (
     sensor.sensor_schema(

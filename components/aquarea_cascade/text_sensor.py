@@ -3,7 +3,7 @@ from esphome.components import text_sensor
 import esphome.config_validation as cv
 from esphome.const import CONF_ID, ENTITY_CATEGORY_DIAGNOSTIC
 
-from .. import CONF_AQUAREA_CASCADE_ID, AquareaCascade, aquarea_cascade_ns
+from . import CONF_AQUAREA_CASCADE_ID, AquareaCascade, aquarea_cascade_ns
 
 DEPENDENCIES = ["aquarea_cascade"]
 
@@ -19,7 +19,9 @@ TYPES = {
 }
 
 CONFIG_SCHEMA = (
-    text_sensor.text_sensor_schema(AquareaCascadeTextSensor, entity_category=ENTITY_CATEGORY_DIAGNOSTIC)
+    text_sensor.text_sensor_schema(
+        AquareaCascadeTextSensor, entity_category=ENTITY_CATEGORY_DIAGNOSTIC
+    )
     .extend(
         {
             cv.GenerateID(CONF_AQUAREA_CASCADE_ID): cv.use_id(AquareaCascade),
