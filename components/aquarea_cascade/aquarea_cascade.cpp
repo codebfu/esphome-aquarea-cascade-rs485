@@ -212,19 +212,38 @@ bool AquareaCascade::bus_idle_(uint32_t now_ms) const {
 }
 
 bool AquareaCascade::sniffed_matches_target_() const {
+  // Require a match on every field we asked to check *and* have actually sniffed.
+  // Unseen fields (common for HR30 if CMH rarely polls it) must not block confirm
+  // after a successful write — the unit may already have applied the command.
+  bool any_required = false;
+  bool any_seen = false;
+
   if (this->target_.check_op) {
-    if (!this->have_op_ || this->sniffed_op_ != this->target_.op)
+    any_required = true;
+    if (!this->have_op_)
+      return false;
+    any_seen = true;
+    if (this->sniffed_op_ != this->target_.op)
       return false;
   }
   if (this->target_.check_mode) {
-    if (!this->have_mode_ || this->sniffed_mode_ != this->target_.mode)
+    any_required = true;
+    if (!this->have_mode_)
+      return false;
+    any_seen = true;
+    if (this->sniffed_mode_ != this->target_.mode)
       return false;
   }
   if (this->target_.check_tank) {
-    if (!this->have_tank_ || this->sniffed_tank_ != this->target_.tank)
-      return false;
+    any_required = true;
+    if (this->have_tank_) {
+      any_seen = true;
+      if (this->sniffed_tank_ != this->target_.tank)
+        return false;
+    }
+    // else: tank not observed yet — do not fail (mode/op still required if set)
   }
-  return this->target_.check_op || this->target_.check_mode || this->target_.check_tank;
+  return any_required && any_seen;
 }
 
 uint16_t AquareaCascade::crc16_(const uint8_t *data, size_t len) {
@@ -352,15 +371,24 @@ void AquareaCascade::handle_frame_(const uint8_t *data, size_t len) {
 
   if (id == this->address_ && fc == 0x03 && len >= 5) {
     uint8_t bytecount = data[2];
-    if (len != size_t(5 + bytecount))
+    if (len != size_t(5 + bytecount) || bytecount < 2 || (bytecount % 2) != 0)
       return;
+
     uint16_t start = 0;
+    bool have_start = false;
     if (this->have_pending_read_) {
+      // Pair with the last FC03 request we saw (even if count looks odd —
+      // desync after our own TX is common on a shared bus).
       start = this->pending_read_start_;
+      have_start = true;
       this->have_pending_read_ = false;
-    } else if (bytecount != 90) {
-      return;
+    } else if (bytecount == 90) {
+      // Classic CMH bulk read: 45 registers from HR0.
+      start = 0;
+      have_start = true;
     }
+    if (!have_start)
+      return;
     this->maybe_update_sniffed_state_(start, data + 3, bytecount);
   }
 }
@@ -385,10 +413,12 @@ void AquareaCascade::maybe_update_sniffed_state_(uint16_t start_addr, const uint
   try_reg(4, mode, have_mode);
   try_reg(30, tank, have_tank);
 
+  // Soft outdoor sanity (HR1 when reading from 0): log only — never drop the
+  // whole sniff update (that previously left have_op/mode/tank stuck unset).
   if (start_addr == 0 && payload_len >= 4) {
     int16_t outdoor = int16_t(u16_be_(payload + 2));
     if (outdoor < -40 || outdoor > 60) {
-      return;
+      ESP_LOGD(TAG, "Sniff HR1 outdoor=%d out of range (ignored for gating)", (int) outdoor);
     }
   }
 
