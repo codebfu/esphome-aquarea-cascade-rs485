@@ -77,6 +77,19 @@ void AquareaCascade::start_command_(Command cmd) {
   this->match_streak_ = 0;
   this->write_index_ = 0;
   this->queue_writes_for_target_();
+
+  // Isolation path: never touch UART TX / wait-idle / sniff confirm.
+  if (this->dry_run_) {
+    char buf[48];
+    snprintf(buf, sizeof(buf), "ok:dry_run:%s:0ms", this->command_name_(cmd));
+    this->phase_ = Phase::IDLE;
+    this->publish_result_(buf);
+    this->publish_phase_();
+    ESP_LOGI(TAG, "DRY_RUN immediate ok for %s (queued %u writes, no bus I/O)",
+             this->command_name_(cmd), (unsigned) this->write_count_);
+    return;
+  }
+
   this->phase_ = Phase::WAIT_IDLE;
   char buf[48];
   snprintf(buf, sizeof(buf), "running:%s", this->command_name_(cmd));
@@ -496,6 +509,18 @@ void AquareaCascade::loop() {
       if ((now - this->last_frame_end_ms_) < need || this->frame_len_ > 0)
         break;
       if (this->send_next_write_()) {
+        if (this->dry_run_) {
+          uint32_t elapsed = now - this->command_started_ms_;
+          char buf[48];
+          snprintf(buf, sizeof(buf), "ok:dry_run:%s:%lums", this->command_name_(this->pending_cmd_),
+                   (unsigned long) elapsed);
+          ESP_LOGI(TAG, "DRY_RUN complete %s in %lu ms (no TX, no sniff confirm)",
+                   this->command_name_(this->pending_cmd_), (unsigned long) elapsed);
+          this->publish_result_(buf);
+          this->phase_ = Phase::IDLE;
+          this->publish_phase_();
+          break;
+        }
         this->phase_ = Phase::CONFIRM;
         this->match_streak_ = 0;
         this->last_rewrite_ms_ = now;
