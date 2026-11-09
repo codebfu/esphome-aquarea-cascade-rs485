@@ -59,6 +59,10 @@ text_sensor:
     name: "HP1 Phase"
     id: hp1_phase
     type: phase
+  - platform: aquarea_cascade
+    name: "HP1 Reset Reason"
+    id: hp1_reset_reason
+    type: reset_reason
 
 sensor:
   - platform: aquarea_cascade

@@ -1,16 +1,48 @@
 #include "aquarea_cascade.h"
 #include "esphome/core/log.h"
 #include "esphome/core/hal.h"
+#include <esp_system.h>
 
 namespace esphome {
 namespace aquarea_cascade {
 
 static const char *const TAG = "aquarea_cascade";
 
+static const char *reset_reason_str_() {
+  switch (esp_reset_reason()) {
+    case ESP_RST_POWERON:
+      return "poweron";
+    case ESP_RST_EXT:
+      return "ext";
+    case ESP_RST_SW:
+      return "software";
+    case ESP_RST_PANIC:
+      return "panic";
+    case ESP_RST_INT_WDT:
+      return "int_wdt";
+    case ESP_RST_TASK_WDT:
+      return "task_wdt";
+    case ESP_RST_WDT:
+      return "wdt";
+    case ESP_RST_DEEPSLEEP:
+      return "deepsleep";
+    case ESP_RST_BROWNOUT:
+      return "brownout";
+    case ESP_RST_SDIO:
+      return "sdio";
+    default:
+      return "other";
+  }
+}
+
 void AquareaCascade::setup() {
   this->last_frame_end_ms_ = millis();
   this->publish_result_("idle");
   this->publish_phase_();
+  if (this->reset_reason_sensor_ != nullptr) {
+    this->reset_reason_sensor_->publish_state(reset_reason_str_());
+  }
+  ESP_LOGI(TAG, "Boot reset_reason=%s", reset_reason_str_());
 }
 
 void AquareaCascade::dump_config() {
@@ -227,9 +259,9 @@ bool AquareaCascade::send_next_write_() {
 
   this->drain_rx_();
   this->write_array(frame, sizeof(frame));
-  // Avoid flush(): on some esp-idf UART setups it can block the main loop.
-  delayMicroseconds(12000);  // ~8 bytes @ 9600 + margin
   this->last_write_ms_ = millis();
+  // Non-blocking holdoff (~12 ms for 8 bytes @ 9600) instead of delayMicroseconds.
+  this->tx_holdoff_until_ms_ = this->last_write_ms_ + 15;
   this->last_frame_end_ms_ = this->last_write_ms_;
   this->frame_len_ = 0;
   ESP_LOGI(TAG, "TX FC06 id=%u reg=%u val=%u", this->address_, (unsigned) reg, (unsigned) val);
@@ -435,6 +467,8 @@ void AquareaCascade::loop() {
       break;
 
     case Phase::WRITE: {
+      if (now < this->tx_holdoff_until_ms_)
+        break;
       // After first register, only need a short gap (~50ms) before the next.
       uint32_t need = this->write_index_ == 0 ? this->idle_ms_ : 50;
       if ((now - this->last_frame_end_ms_) < need || this->frame_len_ > 0)

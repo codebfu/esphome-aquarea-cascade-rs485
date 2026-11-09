@@ -25,6 +25,7 @@ class AquareaCascade : public Component, public uart::UARTDevice {
   void set_confirm_timeout_ms(uint32_t ms) { this->confirm_timeout_ms_ = ms; }
   void set_result_sensor(text_sensor::TextSensor *sensor) { this->result_sensor_ = sensor; }
   void set_phase_sensor(text_sensor::TextSensor *sensor) { this->phase_sensor_ = sensor; }
+  void set_reset_reason_sensor(text_sensor::TextSensor *sensor) { this->reset_reason_sensor_ = sensor; }
   void set_sniff_op_sensor(sensor::Sensor *sensor) { this->sniff_op_sensor_ = sensor; }
   void set_sniff_mode_sensor(sensor::Sensor *sensor) { this->sniff_mode_sensor_ = sensor; }
   void set_sniff_tank_sensor(sensor::Sensor *sensor) { this->sniff_tank_sensor_ = sensor; }
@@ -80,6 +81,8 @@ class AquareaCascade : public Component, public uart::UARTDevice {
   uint32_t confirm_timeout_ms_{60000};
   text_sensor::TextSensor *result_sensor_{nullptr};
   text_sensor::TextSensor *phase_sensor_{nullptr};
+  text_sensor::TextSensor *reset_reason_sensor_{nullptr};
+  uint32_t tx_holdoff_until_ms_{0};
   sensor::Sensor *sniff_op_sensor_{nullptr};
   sensor::Sensor *sniff_mode_sensor_{nullptr};
   sensor::Sensor *sniff_tank_sensor_{nullptr};

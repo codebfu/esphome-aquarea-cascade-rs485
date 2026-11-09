@@ -16,6 +16,7 @@ AquareaCascadeTextSensor = aquarea_cascade_ns.class_(
 TYPES = {
     "result": "set_result_sensor",
     "phase": "set_phase_sensor",
+    "reset_reason": "set_reset_reason_sensor",
 }
 
 CONFIG_SCHEMA = (
