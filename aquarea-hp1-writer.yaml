@@ -4,9 +4,9 @@ esphome:
   comment: RS485 interleaved writes to Panasonic Aquarea HP1 (CZ-NSMB)
 
 esp32:
-  board: esp32dev
+  variant: esp32
   framework:
-    type: arduino
+    type: esp-idf
 
 logger:
   level: INFO
