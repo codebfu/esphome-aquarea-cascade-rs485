@@ -81,6 +81,7 @@ class AquareaCascade : public Component, public uart::UARTDevice {
   uint32_t idle_ms_{80};
   uint32_t confirm_timeout_ms_{60000};
   bool dry_run_{false};
+  uint32_t dry_run_press_count_{0};
   text_sensor::TextSensor *result_sensor_{nullptr};
   text_sensor::TextSensor *phase_sensor_{nullptr};
   text_sensor::TextSensor *reset_reason_sensor_{nullptr};

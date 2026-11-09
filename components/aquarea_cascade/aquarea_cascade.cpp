@@ -68,13 +68,13 @@ void AquareaCascade::dump_config() {
 }
 
 void AquareaCascade::request_command(Command cmd) {
-  // dry_run: publish immediately from the caller (API/button task) and do
-  // nothing else — isolates crashes from loop()/UART RX/state machine.
+  // dry_run: absolute no-op (no publish, no queue, no UART).
+  // If a button press still poweron-resets, the fault is outside this component
+  // (API/WiFi/power rail), not RS485 logic.
   if (this->dry_run_) {
-    char buf[48];
-    snprintf(buf, sizeof(buf), "ok:dry_run:%s:sync", this->command_name_(cmd));
-    this->publish_result_(buf);
-    ESP_LOGI(TAG, "DRY_RUN sync ok for %s (no queue, no UART)", this->command_name_(cmd));
+    this->dry_run_press_count_++;
+    ESP_LOGI(TAG, "DRY_RUN noop press #%lu cmd=%s", (unsigned long) this->dry_run_press_count_,
+             this->command_name_(cmd));
     return;
   }
   // Safe to call from button/API thread: only set a flag for loop().
@@ -476,6 +476,11 @@ void AquareaCascade::loop() {
     if (now - this->last_debug_publish_ms_ >= 5000) {
       this->last_debug_publish_ms_ = now;
       this->publish_phase_();
+      // Prove noop presses were received without touching button publish path.
+      char buf[40];
+      snprintf(buf, sizeof(buf), "boot:dry_run=1:presses=%lu",
+               (unsigned long) this->dry_run_press_count_);
+      this->publish_result_(buf);
     }
     return;
   }
